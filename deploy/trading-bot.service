@@ -1,0 +1,27 @@
+# Systemd service for the trading bot
+# Copy to: /etc/systemd/system/trading-bot.service
+# Enable:  sudo systemctl enable trading-bot
+# Start:   sudo systemctl start trading-bot
+# Logs:    sudo journalctl -u trading-bot -f
+
+[Unit]
+Description=0DTE SPX Options Trading Bot
+After=network.target ibgateway.service
+Wants=ibgateway.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading-bot
+Environment=PATH=/home/ubuntu/trading-bot/.venv/bin:/usr/bin
+ExecStart=/home/ubuntu/trading-bot/.venv/bin/python main.py --tradingview
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Auto-restart if crashed
+WatchdogSec=300
+
+[Install]
+WantedBy=multi-user.target

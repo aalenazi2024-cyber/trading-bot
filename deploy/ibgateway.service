@@ -1,0 +1,21 @@
+# Systemd service for IB Gateway (via IBC auto-login)
+# Copy to: /etc/systemd/system/ibgateway.service
+# Enable:  sudo systemctl enable ibgateway
+# Start:   sudo systemctl start ibgateway
+
+[Unit]
+Description=IB Gateway (Interactive Brokers) via IBC
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+# Xvfb provides a virtual display (IB Gateway needs one even headless)
+ExecStartPre=/usr/bin/Xvfb :1 -screen 0 1024x768x24 &
+Environment=DISPLAY=:1
+ExecStart=/opt/ibc/scripts/ibcstart.sh -g --ibc-path=/opt/ibc --ibc-ini=/opt/ibc/config.ini
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
