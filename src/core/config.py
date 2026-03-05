@@ -54,23 +54,43 @@ class TradingViewConfig:
 
 @dataclass
 class RiskConfig:
-    """Aggressive risk settings for max risk/max reward 0DTE trading."""
-    max_position_size: float = 5000.0       # Max dollars per trade
-    max_daily_loss: float = 2000.0          # Stop trading after this loss
-    max_open_positions: int = 3             # Simultaneous positions
-    profit_target_pct: float = 100.0        # 100% profit target (aggressive)
-    stop_loss_pct: float = 50.0             # 50% stop loss (aggressive)
-    trailing_stop_pct: float = 30.0         # Trailing stop after profit
-    scale_in_enabled: bool = True           # Add to winners
-    max_contracts_per_trade: int = 20       # Max contracts
-    min_option_price: float = 0.50          # Min premium to buy
-    max_option_price: float = 10.00         # Max premium to buy
+    """
+    FULL SEND risk settings — all-in per trade, compound daily.
+
+    Plan: $50K → $200M by going all-in on each trade,
+    targeting 30-50% per winner, compounding gains daily.
+    """
+    # Position sizing: use entire account equity per trade
+    account_equity_pct: float = 95.0        # % of equity to deploy per trade
+    max_position_size: float = 0.0          # 0 = use account_equity_pct instead
+    max_daily_loss: float = 50000.0         # Full account loss allowed (all-in)
+    max_open_positions: int = 1             # ONE position at a time (all-in)
+
+    # Profit targets: 30-50% per trade
+    profit_target_pct: float = 40.0         # 40% gain = close (middle of 30-50)
+    stop_loss_pct: float = 40.0             # 40% stop (tight for 0DTE)
+    trailing_stop_pct: float = 15.0         # 15% trail to lock gains quickly
+    trailing_activation_pct: float = 15.0   # Activate trail after 15% gain
+
+    # All-in mode
+    scale_in_enabled: bool = False          # No scale-in, already all-in
+    max_contracts_per_trade: int = 500      # No cap — size by equity
+    min_option_price: float = 0.50          # Min premium (avoid penny options)
+    max_option_price: float = 25.00         # Allow higher premium for ITM/ATM
     use_aggressive_mode: bool = True        # Full send mode
 
+    # Compounding
+    compound_gains: bool = True             # Reinvest all profits next trade
+    account_goal: float = 200_000_000.0     # $200M target
+
     def __post_init__(self):
+        self.account_equity_pct = float(os.getenv("ACCOUNT_EQUITY_PCT", self.account_equity_pct))
         self.max_position_size = float(os.getenv("MAX_POSITION_SIZE", self.max_position_size))
         self.max_daily_loss = float(os.getenv("MAX_DAILY_LOSS", self.max_daily_loss))
         self.max_open_positions = int(os.getenv("MAX_OPEN_POSITIONS", self.max_open_positions))
+        self.profit_target_pct = float(os.getenv("PROFIT_TARGET_PCT", self.profit_target_pct))
+        self.stop_loss_pct = float(os.getenv("STOP_LOSS_PCT", self.stop_loss_pct))
+        self.account_goal = float(os.getenv("ACCOUNT_GOAL", self.account_goal))
 
 
 @dataclass

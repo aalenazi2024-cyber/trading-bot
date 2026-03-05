@@ -38,6 +38,7 @@ class TradingEngine:
         self.webhook = None
         self._init_tradingview()
         self._init_strategies()
+        self._init_account_equity()
 
     def _init_broker(self):
         """Initialize the configured broker."""
@@ -110,6 +111,14 @@ class TradingEngine:
             from src.strategies.tradingview_strategy import TradingViewStrategy
             self.strategies.append(TradingViewStrategy(self.webhook))
             logger.info("Strategy enabled: TradingView Signals")
+
+    def _init_account_equity(self):
+        """Set starting equity for position sizing and goal tracking."""
+        try:
+            equity = self.broker.get_buying_power()
+            self.risk_manager.set_account_equity(equity)
+        except Exception as e:
+            logger.error(f"Could not get account equity: {e}")
 
     def is_trading_hours(self) -> bool:
         """Check if current time is within trading window."""
@@ -332,18 +341,21 @@ class TradingEngine:
             self.broker.disconnect()
 
     def print_status(self):
-        """Print current bot status."""
+        """Print current bot status with goal progress."""
         summary = self.risk_manager.get_daily_summary()
         logger.info("=" * 60)
-        logger.info(f"BROKER: {self.config.broker_type.upper()}")
-        logger.info(f"DAILY P&L: ${summary['daily_pnl']:+.2f}")
-        logger.info(f"Trades: {summary['trades']} | "
+        logger.info(f"  BROKER: {self.config.broker_type.upper()}")
+        logger.info(f"  DAILY P&L: ${summary['daily_pnl']:+,.2f}")
+        logger.info(f"  ACCOUNT EQUITY: ${summary['current_equity']:,.2f}")
+        logger.info(f"  GOAL: ${summary['goal']:,.0f} ({summary['goal_pct']:.4f}%)")
+        logger.info(f"  Trades: {summary['trades']} | "
                      f"Wins: {summary['wins']} | "
                      f"Losses: {summary['losses']} | "
                      f"Win Rate: {summary['win_rate']:.0f}%")
-        logger.info(f"Open Positions: {summary['open_positions']}")
+        logger.info(f"  Open Positions: {summary['open_positions']}")
         if self.webhook:
-            logger.info(f"TradingView Webhook: Active on port "
+            logger.info(f"  TradingView: Active on port "
                          f"{self.config.tradingview.webhook_port}")
-        logger.info(f"Halted: {summary['is_halted']}")
+        if summary['is_halted']:
+            logger.info(f"  STATUS: HALTED (no more trades today)")
         logger.info("=" * 60)
