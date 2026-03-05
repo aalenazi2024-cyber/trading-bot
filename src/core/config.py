@@ -9,6 +9,7 @@ load_dotenv()
 
 @dataclass
 class BrokerConfig:
+    """Alpaca broker config (used if BROKER=alpaca)."""
     api_key: str = ""
     secret_key: str = ""
     base_url: str = "https://paper-api.alpaca.markets"
@@ -19,6 +20,36 @@ class BrokerConfig:
         self.secret_key = self.secret_key or os.getenv("ALPACA_SECRET_KEY", "")
         self.base_url = os.getenv("ALPACA_BASE_URL", self.base_url)
         self.trading_mode = os.getenv("TRADING_MODE", self.trading_mode)
+
+
+@dataclass
+class IBKRConfig:
+    """Interactive Brokers TWS/Gateway connection config."""
+    host: str = "127.0.0.1"
+    port: int = 7497                       # 7497=paper, 7496=live
+    client_id: int = 1
+    trading_mode: str = "paper"            # "paper" or "live"
+
+    def __post_init__(self):
+        self.host = os.getenv("IBKR_HOST", self.host)
+        self.port = int(os.getenv("IBKR_PORT", self.port))
+        self.client_id = int(os.getenv("IBKR_CLIENT_ID", self.client_id))
+        self.trading_mode = os.getenv("IBKR_TRADING_MODE", self.trading_mode)
+
+
+@dataclass
+class TradingViewConfig:
+    """TradingView webhook server config."""
+    enabled: bool = False
+    webhook_host: str = "0.0.0.0"
+    webhook_port: int = 5000
+    webhook_token: str = ""                # Secret token to verify alerts
+
+    def __post_init__(self):
+        self.enabled = os.getenv("TRADINGVIEW_ENABLED", "false").lower() == "true"
+        self.webhook_host = os.getenv("TRADINGVIEW_HOST", self.webhook_host)
+        self.webhook_port = int(os.getenv("TRADINGVIEW_PORT", self.webhook_port))
+        self.webhook_token = os.getenv("TRADINGVIEW_TOKEN", self.webhook_token)
 
 
 @dataclass
@@ -65,6 +96,9 @@ class StrategyConfig:
     mean_reversion_std_threshold: float = 2.0  # Std deviations for entry
     mean_reversion_lookback: int = 20          # Candle lookback
 
+    # TradingView signals (requires webhook enabled)
+    tradingview_signals_enabled: bool = True
+
 
 @dataclass
 class TradingHours:
@@ -87,9 +121,15 @@ class TradingHours:
 @dataclass
 class BotConfig:
     broker: BrokerConfig = field(default_factory=BrokerConfig)
+    ibkr: IBKRConfig = field(default_factory=IBKRConfig)
+    tradingview: TradingViewConfig = field(default_factory=TradingViewConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     hours: TradingHours = field(default_factory=TradingHours)
+    broker_type: str = "ibkr"              # "ibkr" or "alpaca"
     ticker: str = "SPX"
     data_interval: str = "1min"            # Candle interval
     log_level: str = "INFO"
+
+    def __post_init__(self):
+        self.broker_type = os.getenv("BROKER", self.broker_type)

@@ -7,7 +7,6 @@ from typing import Optional
 from loguru import logger
 
 from src.core.config import BotConfig
-from src.core.broker import AlpacaBroker
 from src.core.risk_manager import RiskManager
 from src.core.option_selector import OptionSelector
 from src.data.market_data import MarketData
@@ -22,23 +21,61 @@ class TradingEngine:
     """
     Main engine that runs the 0DTE SPX trading bot.
 
-    Flow:
-    1. Fetch latest market data
-    2. Run all enabled strategies
-    3. Take the strongest signal
-    4. Execute trade with proper sizing
-    5. Monitor positions for exits
-    6. Repeat until market close
+    Supports two brokers:
+    - IBKR (Interactive Brokers) via TWS/IB Gateway
+    - Alpaca Markets API
+
+    And optional TradingView webhook signals.
     """
 
     def __init__(self, config: BotConfig):
         self.config = config
-        self.broker = AlpacaBroker(config)
+        self.broker = self._init_broker()
         self.risk_manager = RiskManager(config.risk)
-        self.market_data = MarketData(self.broker.api)
+        self.market_data = self._init_market_data()
         self.option_selector = OptionSelector(self.broker, config.risk)
         self.strategies: list[BaseStrategy] = []
+        self.webhook = None
+        self._init_tradingview()
         self._init_strategies()
+
+    def _init_broker(self):
+        """Initialize the configured broker."""
+        if self.config.broker_type == "ibkr":
+            from src.core.ibkr_broker import IBKRBroker
+            logger.info("Using IBKR (Interactive Brokers)")
+            return IBKRBroker(self.config)
+        else:
+            from src.core.broker import AlpacaBroker
+            logger.info("Using Alpaca Markets")
+            return AlpacaBroker(self.config)
+
+    def _init_market_data(self):
+        """Initialize market data source."""
+        if self.config.broker_type == "ibkr":
+            return MarketData(self.broker.ib)
+        else:
+            return MarketData(self.broker.api)
+
+    def _init_tradingview(self):
+        """Initialize TradingView webhook if enabled."""
+        tv = self.config.tradingview
+        if not tv.enabled:
+            return
+
+        if not tv.webhook_token:
+            logger.warning("TradingView enabled but no token set. "
+                            "Set TRADINGVIEW_TOKEN in .env")
+            return
+
+        from src.core.tradingview_webhook import TradingViewWebhook
+        self.webhook = TradingViewWebhook(
+            token=tv.webhook_token,
+            host=tv.webhook_host,
+            port=tv.webhook_port,
+        )
+        self.webhook.start()
+        logger.info(f"TradingView webhook active on port {tv.webhook_port}")
 
     def _init_strategies(self):
         """Initialize enabled strategies."""
@@ -68,6 +105,12 @@ class TradingEngine:
             )
             logger.info("Strategy enabled: Mean Reversion")
 
+        # TradingView strategy (if webhook is running)
+        if cfg.tradingview_signals_enabled and self.webhook:
+            from src.strategies.tradingview_strategy import TradingViewStrategy
+            self.strategies.append(TradingViewStrategy(self.webhook))
+            logger.info("Strategy enabled: TradingView Signals")
+
     def is_trading_hours(self) -> bool:
         """Check if current time is within trading window."""
         now = datetime.now()
@@ -89,25 +132,15 @@ class TradingEngine:
         return now >= force_close
 
     def run_cycle(self):
-        """
-        Run one complete trading cycle:
-        1. Update data
-        2. Check existing positions
-        3. Look for new entries
-        """
+        """Run one complete trading cycle."""
         try:
-            # Update market data
             self.market_data.fetch_intraday_bars()
-
-            # Monitor and manage existing positions
             self._manage_positions()
 
-            # Force close near end of day
             if self.is_force_close_time():
                 self._force_close_all()
                 return
 
-            # Look for new entry signals
             if self.is_trading_hours():
                 self._scan_for_entries()
 
@@ -126,7 +159,7 @@ class TradingEngine:
         for strategy in self.strategies:
             try:
                 signal = strategy.evaluate(self.market_data)
-                if signal and signal.strength >= 0.5:  # Min strength threshold
+                if signal and signal.strength >= 0.5:
                     signals.append(signal)
             except Exception as e:
                 logger.error(f"Strategy {strategy.name} error: {e}")
@@ -134,7 +167,6 @@ class TradingEngine:
         if not signals:
             return
 
-        # Take the strongest signal
         best_signal = max(signals, key=lambda s: s.strength)
         logger.info(f"Best signal: {best_signal.strategy_name} | "
                      f"{best_signal.direction.upper()} | "
@@ -146,6 +178,10 @@ class TradingEngine:
     def _execute_signal(self, signal: Signal):
         """Execute a trade based on a strategy signal."""
         current_price = self.market_data.get_latest_price()
+
+        # For IBKR, get live SPX price if market data didn't return one
+        if self.config.broker_type == "ibkr" and current_price == 0:
+            current_price = self.broker.get_spx_price()
 
         # Select option contract
         contract = self.option_selector.select_contract(
@@ -172,14 +208,22 @@ class TradingEngine:
             return
 
         symbol = contract.get("symbol", "")
+        ib_contract = contract.get("ib_contract")
 
-        # Place order
-        order = self.broker.buy_option(
-            symbol=symbol,
-            qty=qty,
-            order_type="limit",
-            limit_price=round(option_price * 1.02, 2),  # 2% slippage allowance
-        )
+        # Place order - pass IB contract for IBKR broker
+        if self.config.broker_type == "ibkr":
+            order = self.broker.buy_option(
+                symbol=symbol, qty=qty, order_type="limit",
+                limit_price=round(option_price * 1.02, 2),
+                ib_contract=ib_contract,
+            )
+            if ib_contract:
+                self.broker.cache_contract(symbol, ib_contract)
+        else:
+            order = self.broker.buy_option(
+                symbol=symbol, qty=qty, order_type="limit",
+                limit_price=round(option_price * 1.02, 2),
+            )
 
         if not order:
             return
@@ -187,14 +231,16 @@ class TradingEngine:
         # Wait for fill
         filled_order = self.broker.wait_for_fill(order.id, timeout=15)
         if not filled_order or filled_order.status != "filled":
-            logger.warning(f"Order not filled, canceling")
+            logger.warning("Order not filled, canceling")
             try:
-                self.broker.api.cancel_order(order.id)
+                if self.config.broker_type == "ibkr":
+                    self.broker.cancel_order(order.id)
+                else:
+                    self.broker.api.cancel_order(order.id)
             except Exception:
                 pass
             return
 
-        # Register position with risk manager
         fill_price = float(filled_order.filled_avg_price)
         strike = float(contract.get("strike_price", 0))
 
@@ -229,15 +275,12 @@ class TradingEngine:
                 if should_exit:
                     logger.info(f"EXIT SIGNAL for {symbol}: {reason}")
                     positions_to_close.append((symbol, position.qty, current_price))
-
-                # Check for scale-in opportunity
                 elif self.risk_manager.should_scale_in(symbol, current_price):
                     self._scale_in(symbol, position, current_price)
 
             except Exception as e:
                 logger.error(f"Error managing position {symbol}: {e}")
 
-        # Execute closes
         for symbol, qty, price in positions_to_close:
             order = self.broker.sell_option(symbol, qty)
             if order:
@@ -251,7 +294,6 @@ class TradingEngine:
         if not can_trade:
             return
 
-        # Add half the original position size
         additional_qty = max(1, position.qty // 2)
         buying_power = self.broker.get_buying_power()
         cost = current_price * additional_qty * 100
@@ -281,19 +323,27 @@ class TradingEngine:
                 if filled and filled.status == "filled":
                     self.risk_manager.record_close(symbol, float(filled.filled_avg_price))
                 else:
-                    # Emergency market order
                     self.broker.sell_option(symbol, position.qty, "market")
                     self.risk_manager.record_close(symbol, 0.01)
+
+    def shutdown(self):
+        """Clean up resources."""
+        if self.config.broker_type == "ibkr":
+            self.broker.disconnect()
 
     def print_status(self):
         """Print current bot status."""
         summary = self.risk_manager.get_daily_summary()
         logger.info("=" * 60)
+        logger.info(f"BROKER: {self.config.broker_type.upper()}")
         logger.info(f"DAILY P&L: ${summary['daily_pnl']:+.2f}")
         logger.info(f"Trades: {summary['trades']} | "
                      f"Wins: {summary['wins']} | "
                      f"Losses: {summary['losses']} | "
                      f"Win Rate: {summary['win_rate']:.0f}%")
         logger.info(f"Open Positions: {summary['open_positions']}")
+        if self.webhook:
+            logger.info(f"TradingView Webhook: Active on port "
+                         f"{self.config.tradingview.webhook_port}")
         logger.info(f"Halted: {summary['is_halted']}")
         logger.info("=" * 60)
