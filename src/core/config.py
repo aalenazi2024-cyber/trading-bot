@@ -55,10 +55,10 @@ class TradingViewConfig:
 @dataclass
 class RiskConfig:
     """
-    FULL SEND risk settings — all-in per trade, compound daily.
+    FULL SEND risk settings — all-in per trade, compound continuously.
 
     Plan: $50K → $200M by going all-in on each trade,
-    targeting 30-50% per winner, compounding gains daily.
+    targeting 30% per winner, unlimited trades per day.
     """
     # Position sizing: use entire account equity per trade
     account_equity_pct: float = 95.0        # % of equity to deploy per trade
@@ -67,7 +67,7 @@ class RiskConfig:
     max_open_positions: int = 1             # ONE position at a time (all-in)
 
     # Profit targets: 30-50% per trade
-    profit_target_pct: float = 40.0         # 40% gain = close (middle of 30-50)
+    profit_target_pct: float = 30.0         # 30% gain = close
     stop_loss_pct: float = 40.0             # 40% stop (tight for 0DTE)
     trailing_stop_pct: float = 15.0         # 15% trail to lock gains quickly
     trailing_activation_pct: float = 15.0   # Activate trail after 15% gain

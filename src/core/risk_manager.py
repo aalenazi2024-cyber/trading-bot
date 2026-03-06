@@ -1,17 +1,11 @@
 """Risk management for all-in 0DTE compounding strategy.
 
-Plan: $50K starting equity, all-in each trade, target 30-50% per trade,
-compound daily until $200M.
+Plan: $50K starting equity, all-in each trade, target 30% per trade,
+compound gains, trade as many times as opportunities arise.
 
-Math at 40% daily return compounding:
-  Day 1:  $50,000 → $70,000
-  Day 5:  $268,800
-  Day 10: $1,445,297
-  Day 20: $41,810,592
-  Day 25: $225,472,140 → GOAL
-
-This requires winning every single day. One loss resets progress.
 The bot picks the highest-conviction signal and goes all-in.
+After each trade (win or loss), it looks for the next opportunity.
+No daily trade limit — trades all day as long as there's equity.
 """
 
 from dataclasses import dataclass
@@ -58,7 +52,8 @@ class RiskManager:
     Key behaviors:
     - Uses full account equity for each trade (95% default)
     - Only ONE position at a time (all-in)
-    - Targets 30-50% per trade
+    - Targets 30% per trade
+    - Unlimited trades per day — keeps trading as long as there's equity
     - Trailing stop activates at 15% gain to lock profits
     - Compounds all gains into the next trade
     - Tracks progress toward $200M goal
@@ -251,11 +246,10 @@ class RiskManager:
 
         del self.positions[symbol]
 
-        # Halt after a loss to avoid revenge trading
+        # Keep trading — look for the next opportunity
         if pnl < 0:
-            self.is_halted = True
-            logger.warning("HALTED: Loss taken. No more trades today. "
-                            "Regroup tomorrow with compounded equity.")
+            logger.warning(f"Loss taken. Looking for next opportunity. "
+                            f"Remaining equity: ${self.current_equity:,.2f}")
 
     def set_account_equity(self, equity: float):
         """Set current account equity (called on startup)."""
